@@ -81,14 +81,16 @@ class BatchICWorkflow:
     4. 支持进度监控和性能统计
     """
     
-    def __init__(self, config=None):
+    def __init__(self, config=None, batch_config=None):
         """
         初始化批量IC检测工作流
         
         Args:
             config: 工作流配置对象
+            batch_config: 批量配置对象（来自config_batch.py）
         """
         self.config = config or WorkflowConfig()
+        self.batch_config = batch_config  # 保存batch_config用于因子选择
         self.memory_monitor = MemoryMonitor(self.config.max_memory_gb)
         self.data_dir = os.path.join(os.path.dirname(__file__), 'data')
         os.makedirs(self.data_dir, exist_ok=True)
@@ -189,7 +191,7 @@ class BatchICWorkflow:
             step2_start = time.time()
             progress_tracker.update("选择因子", f"目标: {workflow_config['factors']}个因子")
             
-            factor_selector = FactorBatchSelector(self.config, self.data_dir)
+            factor_selector = FactorBatchSelector(self.config, self.data_dir, self.batch_config)
             selected_factors = factor_selector.select_factors_batch(workflow_config['factors'])
             
             step2_time = time.time() - step2_start

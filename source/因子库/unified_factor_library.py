@@ -169,6 +169,23 @@ class UnifiedFactorLibrary:
             except ImportError as e:
                 warnings.warn(f"无法加载tsfresh因子源: {e}")
         
+        # 尝试加载自定义因子源
+        if sources is None or 'custom' in sources:
+            try:
+                # 创建默认的自定义因子源（空因子）
+                default_custom_factors = {
+                    'default_factor': {
+                        'function_name': 'default_factor',
+                        'description': '默认自定义因子',
+                        'expression': 'close',
+                        'category': '自定义因子'
+                    }
+                }
+                self.sources['custom'] = CustomFactorSource(default_custom_factors)
+                available_sources.append('custom')
+            except Exception as e:
+                warnings.warn(f"无法加载自定义因子源: {e}")
+        
         if not available_sources:
             raise RuntimeError("没有可用的因子源")
         
