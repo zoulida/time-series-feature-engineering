@@ -49,6 +49,42 @@ class MyFactors:
                     "价格均线周期": 20,
                     "价格上限比例": 0.1
                 }
+            },
+            "ZHANGTING_SCORE_FACTOR": {
+                "expression": "ZHANGTING_SCORE_FACTOR($close, $high, $stock_code)",
+                "function_name": "zhangting_score_factor",
+                "description": "涨停评分因子：7个交易日内涨停次数评分（连续涨停算一次）",
+                "category": "涨停因子",
+                "formula": "连续涨停算一次，按涨停次数评分",
+                "parameters": {
+                    "涨停判断周期": 7,
+                    "评分范围": "[0, 1]"
+                }
+            },
+            "VOLUME_SCORE_FACTOR": {
+                "expression": "VOLUME_SCORE_FACTOR($volume)",
+                "function_name": "volume_score_factor",
+                "description": "成交量评分因子：成交量20日均线当日大于7天前1.5倍的超过比例评分",
+                "category": "成交量因子",
+                "formula": "按超过比例评分，使用对数函数平滑",
+                "parameters": {
+                    "成交量均线周期": 20,
+                    "比较周期": 7,
+                    "倍数阈值": 1.5,
+                    "评分范围": "[0, 1]"
+                }
+            },
+            "PRICE_SCORE_FACTOR": {
+                "expression": "PRICE_SCORE_FACTOR($close)",
+                "function_name": "price_score_factor",
+                "description": "价格评分因子：价格不高于close20日均线10%的比例评分",
+                "category": "价格因子",
+                "formula": "价格越低，评分越高",
+                "parameters": {
+                    "价格均线周期": 20,
+                    "最大比例": 0.1,
+                    "评分范围": "[0, 1]"
+                }
             }
         }
     
@@ -100,9 +136,120 @@ class MyFactors:
         price_score = self._calculate_price_score(close, ma_period=20, max_ratio=0.1)
         
         # 等权组合三个条件（每个条件最高1分）
-        result = zhangting_score + volume_score + price_score
+        result = zhangting_score * ( volume_score + price_score )
         
         return result
+    
+    def zhangting_score_factor(self, 
+                              close: pd.Series, 
+                              high: pd.Series, 
+                              volume: pd.Series = None,
+                              stock_code: str = '000001.SZ') -> pd.Series:
+        """
+        涨停评分因子：7个交易日内涨停次数评分（连续涨停算一次）
+        
+        评分规则：
+        - 没有涨停：0分
+        - 涨停1次：1分
+        - 涨停2次：2分
+        - 涨停3次及以上：2.5分
+        - 最高评分：1分（标准化到0-1范围）
+        
+        Parameters:
+        -----------
+        close : pd.Series
+            收盘价序列
+        high : pd.Series
+            最高价序列
+        stock_code : str
+            股票代码
+        period : int
+            检查周期，默认7天
+            
+        Returns:
+        --------
+        pd.Series
+            涨停评分，范围[0, 1]
+        """
+        if limitUp is None:
+            raise ImportError("涨停判断模块不可用，请检查zhangtingCalculation.py路径")
+        
+        # 验证必需参数
+        if close is None or high is None:
+            raise ValueError("涨停评分因子需要close和high参数")
+        
+        # 确保数据长度足够
+        min_length = max(20, 7)  # 至少需要20天数据
+        if len(close) < min_length:
+            return pd.Series([0] * len(close), index=close.index)
+        
+        return self._calculate_zhangting_score(close, high, stock_code, period=7)
+    
+    def volume_score_factor(self, 
+                           close: pd.Series = None,
+                           high: pd.Series = None,
+                           volume: pd.Series = None,
+                           stock_code: str = '000001.SZ') -> pd.Series:
+        """
+        成交量评分因子：成交量20日均线当日大于7天前1.5倍的超过比例评分
+        
+        评分规则：
+        - 没有超过1.5倍：0分
+        - 超过1.5倍：按超过比例评分，最高1分
+        
+        Parameters:
+        -----------
+        volume : pd.Series
+            成交量序列
+            
+        Returns:
+        --------
+        pd.Series
+            成交量评分，范围[0, 1]
+        """
+        # 验证必需参数
+        if volume is None:
+            raise ValueError("成交量评分因子需要volume参数")
+        
+        # 确保数据长度足够
+        min_length = 27  # 20天均线 + 7天比较
+        if len(volume) < min_length:
+            return pd.Series([0] * len(volume), index=volume.index)
+        
+        return self._calculate_volume_score(volume, ma_period=20, compare_period=7, multiplier=1.5)
+    
+    def price_score_factor(self, 
+                          close: pd.Series = None,
+                          high: pd.Series = None,
+                          volume: pd.Series = None,
+                          stock_code: str = '000001.SZ') -> pd.Series:
+        """
+        价格评分因子：价格不高于close20日均线10%的比例评分
+        
+        评分规则：
+        - 价格高于20日均线10%：0分
+        - 价格在20日均线10%以内：按比例评分，最高1分
+        
+        Parameters:
+        -----------
+        close : pd.Series
+            收盘价序列
+            
+        Returns:
+        --------
+        pd.Series
+            价格评分，范围[0, 1]
+        """
+        # 验证必需参数
+        if close is None:
+            raise ValueError("价格评分因子需要close参数")
+        
+        # 确保数据长度足够
+        min_length = 20  # 20天均线
+        if len(close) < min_length:
+            return pd.Series([0] * len(close), index=close.index)
+        
+        return self._calculate_price_score(close, ma_period=20, max_ratio=0.1)
     
     def _calculate_zhangting_score(self, close: pd.Series, high: pd.Series, 
                                   stock_code: str, period: int = 7) -> pd.Series:

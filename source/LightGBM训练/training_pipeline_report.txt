@@ -1,0 +1,31 @@
+训练管道执行报告
+==================================================
+
+执行时间: 2025-09-29 10:46:27 - 2025-09-29 10:47:06
+总耗时: 38.77 秒 (0.65 分钟)
+
+数据信息:
+  原始数据形状: (607594, 28)
+  特征列: ['factor_CUSTOM_PRICE_SCORE_FACTOR', 'factor_CUSTOM_ZHANGTING_SCORE_FACTOR', 'factor_CUSTOM_VOLUME_SCORE_FACTOR']
+  目标列: return_15d
+  训练集样本数: 486075
+  验证集样本数: 60759
+  测试集样本数: 60760
+
+模型信息:
+  模型类型: LightGBM回归
+  最佳迭代次数: 110
+
+模型性能:
+  TRAIN - RMSE: 0.103389, R²: 0.012290
+  VAL - RMSE: 0.110200, R²: -0.001922
+  TEST - RMSE: 0.088785, R²: -0.071324
+
+IC分析结果（测试集）:
+  测试集 - 皮尔逊IC: 0.147513, 斯皮尔曼IC: 0.081317
+  测试集样本数: 60760
+
+特征重要性:
+  factor_CUSTOM_PRICE_SCORE_FACTOR: 388.426232
+  factor_CUSTOM_VOLUME_SCORE_FACTOR: 124.577893
+  factor_CUSTOM_ZHANGTING_SCORE_FACTOR: 66.789825

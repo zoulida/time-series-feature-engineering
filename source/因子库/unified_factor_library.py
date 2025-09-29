@@ -172,19 +172,35 @@ class UnifiedFactorLibrary:
         # 尝试加载自定义因子源
         if sources is None or 'custom' in sources:
             try:
-                # 创建默认的自定义因子源（空因子）
-                default_custom_factors = {
-                    'default_factor': {
-                        'function_name': 'default_factor',
-                        'description': '默认自定义因子',
-                        'expression': 'close',
-                        'category': '自定义因子'
-                    }
-                }
-                self.sources['custom'] = CustomFactorSource(default_custom_factors)
+                # 导入并加载myfactors.py中的因子
+                import sys
+                import os
+                current_dir = os.path.dirname(__file__)
+                custom_dir = os.path.join(current_dir, 'custom')
+                if custom_dir not in sys.path:
+                    sys.path.append(custom_dir)
+                from myfactors import MyFactors
+                my_factors = MyFactors()
+                custom_factors = my_factors.get_all_factors()
+                self.sources['custom'] = CustomFactorSource(custom_factors)
                 available_sources.append('custom')
+                print(f"成功加载自定义因子: {list(custom_factors.keys())}")
             except Exception as e:
                 warnings.warn(f"无法加载自定义因子源: {e}")
+                # 如果加载失败，使用默认因子
+                try:
+                    default_custom_factors = {
+                        'default_factor': {
+                            'function_name': 'default_factor',
+                            'description': '默认自定义因子',
+                            'expression': 'close',
+                            'category': '自定义因子'
+                        }
+                    }
+                    self.sources['custom'] = CustomFactorSource(default_custom_factors)
+                    available_sources.append('custom')
+                except Exception as e2:
+                    warnings.warn(f"无法加载默认自定义因子源: {e2}")
         
         if not available_sources:
             raise RuntimeError("没有可用的因子源")

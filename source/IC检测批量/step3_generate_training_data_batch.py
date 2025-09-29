@@ -268,15 +268,58 @@ class TrainingDataBatchGenerator:
         Returns:
             np.ndarray: 因子值数组
         """
-        # 根据因子表达式或函数名计算
-        expression = factor_info.get('expression', '')
-        if expression:
-            # 这里应该解析表达式并计算
-            # 目前使用简化版本
-            return np.random.randn(len(data))
-        else:
-            # 使用随机值作为占位符
-            return np.random.randn(len(data))
+        try:
+            # 获取因子函数名
+            function_name = factor_info.get('function_name', '')
+            if function_name:
+                # 尝试从myfactors模块导入并调用函数
+                try:
+                    import sys
+                    import os
+                    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '因子库'))
+                    from custom.myfactors import MyFactors
+                    my_factors = MyFactors()
+                    
+                    # 获取计算函数
+                    if hasattr(my_factors, function_name):
+                        factor_func = getattr(my_factors, function_name)
+                        
+                        # 准备函数参数
+                        kwargs = {}
+                        if 'close' in data.columns:
+                            kwargs['close'] = data['close']
+                        if 'high' in data.columns:
+                            kwargs['high'] = data['high']
+                        if 'volume' in data.columns:
+                            kwargs['volume'] = data['volume']
+                        if 'stock_code' in data.columns:
+                            kwargs['stock_code'] = data['stock_code'].iloc[0] if len(data) > 0 else '000001.SZ'
+                        
+                        # 调用因子计算函数
+                        result = factor_func(**kwargs)
+                        return result.values if hasattr(result, 'values') else result
+                    else:
+                        logger.warning(f"因子函数 {function_name} 不存在于MyFactors类中")
+                        return np.full(len(data), np.nan)
+                        
+                except ImportError as e:
+                    logger.warning(f"无法导入MyFactors模块: {e}")
+                    return np.full(len(data), np.nan)
+                except Exception as e:
+                    logger.warning(f"计算因子 {factor_name} 时出错: {e}")
+                    return np.full(len(data), np.nan)
+            else:
+                # 如果没有函数名，尝试解析表达式
+                expression = factor_info.get('expression', '')
+                if expression == 'close' and 'close' in data.columns:
+                    return data['close'].values
+                else:
+                    logger.warning(f"无法解析因子表达式: {expression}")
+                    return np.full(len(data), np.nan)
+                    
+        except Exception as e:
+            logger.warning(f"计算因子 {factor_name} 失败: {str(e)}")
+            return np.full(len(data), np.nan)
     
     def _calculate_returns(self, data):
         """计算收益率
