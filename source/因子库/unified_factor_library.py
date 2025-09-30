@@ -23,12 +23,12 @@ except ImportError:
     warnings.warn("Alpha158因子库导入失败，请检查alpha158_factors.py文件")
 
 try:
-    from extract_tsfresh_features import create_tsfresh_factor_library
+    from tsfresh_factors import TSFreshFactors
 except ImportError:
-    create_tsfresh_factor_library = None
-    warnings.warn("tsfresh因子库导入失败，请检查extract_tsfresh_features.py文件")
+    TSFreshFactors = None
+    warnings.warn("tsfresh因子库导入失败，请检查tsfresh_factors.py文件")
 except Exception as e:
-    create_tsfresh_factor_library = None
+    TSFreshFactors = None
     warnings.warn(f"tsfresh因子库导入失败: {e}")
 
 
@@ -81,18 +81,18 @@ class TSFreshFactorSource(FactorSource):
     """tsfresh因子源"""
     
     def __init__(self):
-        if create_tsfresh_factor_library is None:
+        if TSFreshFactors is None:
             raise ImportError("tsfresh因子库不可用")
-        self.factor_lib, _ = create_tsfresh_factor_library()
+        self.factor_lib = TSFreshFactors()
     
     def get_factors(self) -> Dict[str, Dict]:
         """获取tsfresh因子"""
         factors = {}
-        for name, info in self.factor_lib.items():
-            factors[f"TSFRESH_{name}"] = {
+        for name, info in self.factor_lib.get_all_factors().items():
+            factors[name] = {
                 **info,
                 "source": "tsfresh",
-                "category": info.get('category', 'tsfresh_其他特征')
+                "category": f"tsfresh_{info.get('category', '未知')}"
             }
         return factors
     
@@ -100,7 +100,7 @@ class TSFreshFactorSource(FactorSource):
         return "tsfresh"
     
     def get_factor_count(self) -> int:
-        return len(self.factor_lib)
+        return self.factor_lib.get_factor_count()
 
 
 class CustomFactorSource(FactorSource):

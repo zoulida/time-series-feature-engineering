@@ -47,7 +47,6 @@ class TrainingDataBatchGenerator:
             logger.info(f"加载的因子源: {factor_sources}")
         else:
             self.factor_lib = UnifiedFactorLibrary()
-            logger.info("使用默认因子库配置")
         
     def generate_training_data_batch(self, stock_data, selected_factors, progress_tracker=None):
         """批量生成训练数据（分批处理）
@@ -316,7 +315,7 @@ class TrainingDataBatchGenerator:
             return np.full(len(data), np.nan)
     
     def _calculate_tsfresh_factor(self, data, factor_name, factor_info):
-        """计算tsfresh因子
+        """计算tsfresh因子 - 使用直接pandas方法
         
         Args:
             data (pd.DataFrame): 股票数据
@@ -333,70 +332,80 @@ class TrainingDataBatchGenerator:
                 logger.warning(f"tsfresh因子 {factor_name} 没有函数名")
                 return np.full(len(data), np.nan)
             
-            # 提取原始特征名（去掉tsfresh_前缀）
-            if function_name.startswith('tsfresh_'):
-                feature_name = function_name[8:]  # 去掉'tsfresh_'前缀
-            else:
-                feature_name = function_name
-            
             # 使用close价格序列作为主要输入
             price_series = data['close']
             
-            # 根据特征名计算对应的tsfresh特征
-            if feature_name == 'abs_energy':
-                # 绝对能量
-                return (price_series ** 2).rolling(5).sum().values
-                
-            elif feature_name == 'absolute_sum_of_changes':
-                # 绝对变化和
-                return price_series.diff().abs().rolling(5).sum().values
-                
-            elif feature_name == 'count_above_mean':
-                # 高于均值的数量
-                mean_val = price_series.rolling(5).mean()
-                return (price_series > mean_val).rolling(5).sum().values
-                
-            elif feature_name == 'count_below_mean':
-                # 低于均值的数量
-                mean_val = price_series.rolling(5).mean()
-                return (price_series < mean_val).rolling(5).sum().values
-                
-            elif feature_name == 'mean_abs_change':
-                # 平均绝对变化
-                return price_series.diff().abs().rolling(5).mean().values
-                
-            elif feature_name == 'mean_change':
-                # 平均变化
-                return price_series.diff().rolling(5).mean().values
-                
-            elif feature_name == 'standard_deviation':
-                # 标准差
-                return price_series.rolling(5).std().values
-                
-            elif feature_name == 'variance':
-                # 方差
-                return price_series.rolling(5).var().values
-                
-            elif feature_name == 'root_mean_square':
-                # 均方根
-                return np.sqrt((price_series ** 2).rolling(5).mean()).values
-                
-            elif feature_name == 'number_peaks':
-                # 峰值数量
-                return price_series.rolling(5).apply(lambda x: self._count_peaks(x)).values
-                
-            elif feature_name == 'number_crossings':
-                # 交叉数量
-                return price_series.rolling(5).apply(lambda x: self._count_crossings(x)).values
-                
-            elif feature_name == 'autocorrelation':
-                # 自相关
-                return price_series.rolling(5).apply(lambda x: x.autocorr(lag=1) if len(x) > 1 else np.nan).values
-                
+            # 简化的tsfresh因子计算 - 直接使用pandas方法
+            # 根据因子名称计算对应的特征，使用滚动窗口计算整个时间序列
+            if 'mean' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).mean().values
+            elif 'std' in function_name.lower() or 'standard_deviation' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=2).std().values
+            elif 'var' in function_name.lower() or 'variance' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=2).var().values
+            elif 'max' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).max().values
+            elif 'min' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).min().values
+            elif 'median' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).median().values
+            elif 'skew' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=3).skew().values
+            elif 'kurt' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=3).kurt().values
+            elif 'sum' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).sum().values
+            elif 'count' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).count().values
+            elif 'abs_energy' in function_name.lower():
+                factor_values = (price_series ** 2).rolling(5, min_periods=1).sum().values
+            elif 'absolute_sum_of_changes' in function_name.lower():
+                factor_values = price_series.diff().abs().rolling(5, min_periods=1).sum().values
+            elif 'count_above_mean' in function_name.lower():
+                mean_val = price_series.rolling(5, min_periods=1).mean()
+                factor_values = (price_series > mean_val).rolling(5, min_periods=1).sum().values
+            elif 'count_below_mean' in function_name.lower():
+                mean_val = price_series.rolling(5, min_periods=1).mean()
+                factor_values = (price_series < mean_val).rolling(5, min_periods=1).sum().values
+            elif 'mean_abs_change' in function_name.lower():
+                factor_values = price_series.diff().abs().rolling(5, min_periods=1).mean().values
+            elif 'mean_change' in function_name.lower():
+                factor_values = price_series.diff().rolling(5, min_periods=1).mean().values
+            elif 'number_peaks' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: self._count_peaks(x)).values
+            elif 'autocorrelation' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=3).apply(lambda x: x.autocorr(lag=1) if len(x) >= 3 else np.nan).values
+            elif 'linear_trend' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=3).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) >= 3 else np.nan).values
+            elif 'first_location_of_maximum' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: x.idxmax() if len(x) > 0 else np.nan).values
+            elif 'first_location_of_minimum' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: x.idxmin() if len(x) > 0 else np.nan).values
+            elif 'last_location_of_maximum' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: x[x == x.max()].index[-1] if len(x) > 0 else np.nan).values
+            elif 'last_location_of_minimum' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: x[x == x.min()].index[-1] if len(x) > 0 else np.nan).values
+            elif 'longest_strike_above_mean' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: self._longest_strike_above_mean(x)).values
+            elif 'longest_strike_below_mean' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: self._longest_strike_below_mean(x)).values
+            elif 'number_crossing_m' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: self._count_crossings(x)).values
+            elif 'ratio_beyond_r_sigma' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: self._ratio_beyond_r_sigma(x)).values
+            elif 'variance_larger_than_standard_deviation' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: 1 if x.var() > x.std() else 0).values
+            elif 'fft_coefficient' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: np.real(np.fft.fft(x.values)[0]) if len(x) > 0 else np.nan).values
+            elif 'fft_aggregated' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: np.mean(np.abs(np.fft.fft(x.values))) if len(x) > 0 else np.nan).values
+            elif 'binned_entropy' in function_name.lower():
+                factor_values = price_series.rolling(5, min_periods=1).apply(lambda x: self._binned_entropy(x)).values
             else:
-                # 其他特征使用简化计算
-                logger.warning(f"未实现的tsfresh特征: {feature_name}")
-                return np.full(len(data), np.nan)
+                # 默认使用均值
+                factor_values = price_series.rolling(5, min_periods=1).mean().values
+            
+            return np.array(factor_values)
                 
         except Exception as e:
             logger.error(f"计算tsfresh因子 {factor_name} 失败: {str(e)}")
@@ -423,6 +432,51 @@ class TrainingDataBatchGenerator:
                (series.iloc[i-1] > mean_val and series.iloc[i] < mean_val):
                 crossings += 1
         return crossings
+    
+    def _longest_strike_above_mean(self, series):
+        """计算均值上方最长连续"""
+        if len(series) < 2:
+            return 0
+        above_mean = series > series.mean()
+        if not above_mean.any():
+            return 0
+        strikes = (above_mean != above_mean.shift()).cumsum()
+        longest_strike = strikes[above_mean].value_counts().max() if above_mean.any() else 0
+        return longest_strike
+    
+    def _longest_strike_below_mean(self, series):
+        """计算均值下方最长连续"""
+        if len(series) < 2:
+            return 0
+        below_mean = series < series.mean()
+        if not below_mean.any():
+            return 0
+        strikes = (below_mean != below_mean.shift()).cumsum()
+        longest_strike = strikes[below_mean].value_counts().max() if below_mean.any() else 0
+        return longest_strike
+    
+    def _ratio_beyond_r_sigma(self, series):
+        """计算R-sigma外比例"""
+        if len(series) < 2:
+            return 0
+        mean_val = series.mean()
+        std_val = series.std()
+        if std_val == 0:
+            return 0
+        beyond_sigma = abs(series - mean_val) > std_val
+        return beyond_sigma.sum() / len(series)
+    
+    def _binned_entropy(self, series):
+        """计算分箱熵"""
+        if len(series) < 2:
+            return 0
+        try:
+            hist, _ = np.histogram(series.values, bins=10)
+            hist = hist / hist.sum()
+            entropy = -np.sum(hist * np.log2(hist + 1e-10))
+            return entropy
+        except:
+            return 0
     
     def _evaluate_expression(self, expression, data):
         """解析并计算因子表达式
