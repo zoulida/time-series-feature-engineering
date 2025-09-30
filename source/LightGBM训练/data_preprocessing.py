@@ -11,6 +11,7 @@ import os
 import json
 from datetime import datetime
 import logging
+from config import config
 
 # 设置日志
 logging.basicConfig(
@@ -110,15 +111,9 @@ class DataPreprocessor:
         """
         logger.info("正在准备特征和目标变量...")
         
-        # 目标变量
-        target_col = 'return_15d'
-        
-        # 特征变量（使用现有的因子列名）
-        feature_cols = [
-            'factor_CUSTOM_PRICE_SCORE_FACTOR',
-            'factor_CUSTOM_ZHANGTING_SCORE_FACTOR', 
-            'factor_CUSTOM_VOLUME_SCORE_FACTOR'
-        ]
+        # 从配置文件获取目标变量和特征列
+        target_col = config.get_target_column()
+        feature_cols = config.get_feature_columns()
         
         # 检查列是否存在
         missing_cols = []
@@ -150,16 +145,23 @@ class DataPreprocessor:
         
         return True
     
-    def split_data_by_time(self, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1):
+    def split_data_by_time(self, train_ratio=None, val_ratio=None, test_ratio=None):
         """
         按时间顺序划分数据集
         
         Args:
-            train_ratio: 训练集比例
-            val_ratio: 验证集比例  
-            test_ratio: 测试集比例
+            train_ratio: 训练集比例，如果为None则使用配置文件中的值
+            val_ratio: 验证集比例，如果为None则使用配置文件中的值
+            test_ratio: 测试集比例，如果为None则使用配置文件中的值
         """
         logger.info("正在按时间顺序划分数据集...")
+        
+        # 从配置文件获取默认比例
+        if train_ratio is None or val_ratio is None or test_ratio is None:
+            ratios = config.get_data_split_ratios()
+            train_ratio = train_ratio or ratios['train']
+            val_ratio = val_ratio or ratios['val']
+            test_ratio = test_ratio or ratios['test']
         
         # 确保比例总和为1
         total_ratio = train_ratio + val_ratio + test_ratio
@@ -214,14 +216,18 @@ class DataPreprocessor:
         
         return True
     
-    def save_processed_data(self, output_dir="data"):
+    def save_processed_data(self, output_dir=None):
         """
         保存处理后的数据
         
         Args:
-            output_dir: 输出目录
+            output_dir: 输出目录，如果为None则使用配置文件中的值
         """
         logger.info("正在保存处理后的数据...")
+        
+        # 从配置文件获取默认输出目录
+        if output_dir is None:
+            output_dir = config.DATA_DIR
         
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)

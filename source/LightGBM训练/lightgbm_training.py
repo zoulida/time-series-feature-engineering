@@ -12,6 +12,7 @@ import json
 import logging
 from datetime import datetime
 import warnings
+from config import config
 warnings.filterwarnings('ignore')
 
 # 尝试导入LightGBM
@@ -46,14 +47,14 @@ logger = logging.getLogger(__name__)
 class LightGBMTrainer:
     """LightGBM训练器类"""
     
-    def __init__(self, data_dir="data"):
+    def __init__(self, data_dir=None):
         """
         初始化LightGBM训练器
         
         Args:
-            data_dir: 处理后的数据目录
+            data_dir: 处理后的数据目录，如果为None则使用配置文件中的值
         """
-        self.data_dir = data_dir
+        self.data_dir = data_dir or config.DATA_DIR
         self.model = None
         self.feature_importance = None
         self.train_predictions = None
@@ -80,12 +81,8 @@ class LightGBMTrainer:
             self.test_data = pd.read_csv(os.path.join(self.data_dir, 'test_data.csv'))
             self.test_data['date'] = pd.to_datetime(self.test_data['date'])
             
-            # 准备特征和目标变量
-            feature_cols = [
-                'factor_CUSTOM_PRICE_SCORE_FACTOR',
-                'factor_CUSTOM_ZHANGTING_SCORE_FACTOR', 
-                'factor_CUSTOM_VOLUME_SCORE_FACTOR'
-            ]
+            # 从配置文件获取特征列
+            feature_cols = config.get_feature_columns()
             
             self.X_train = self.train_data[feature_cols]
             self.y_train = self.train_data['return_15d']
@@ -111,19 +108,8 @@ class LightGBMTrainer:
         logger.info("开始训练LightGBM模型...")
         
         try:
-            # 设置LightGBM参数
-            params = {
-                'objective': 'regression',
-                'metric': 'rmse',
-                'boosting_type': 'gbdt',
-                'num_leaves': 31,
-                'learning_rate': 0.05,
-                'feature_fraction': 0.9,
-                'bagging_fraction': 0.8,
-                'bagging_freq': 5,
-                'verbose': 0,
-                'random_state': 42
-            }
+            # 从配置文件获取LightGBM参数
+            params = config.get_lightgbm_params()
             
             # 创建训练数据集
             train_dataset = lgb.Dataset(
@@ -140,16 +126,19 @@ class LightGBMTrainer:
                 feature_name=list(self.X_val.columns)
             )
             
+            # 从配置文件获取训练参数
+            training_params = config.get_training_params()
+            
             # 训练模型
             self.model = lgb.train(
                 params,
                 train_dataset,
                 valid_sets=[train_dataset, val_dataset],
                 valid_names=['train', 'valid'],
-                num_boost_round=1000,
+                num_boost_round=training_params['num_boost_round'],
                 callbacks=[
-                    lgb.early_stopping(stopping_rounds=50),
-                    lgb.log_evaluation(period=100)
+                    lgb.early_stopping(stopping_rounds=training_params['early_stopping_rounds']),
+                    lgb.log_evaluation(period=training_params['log_evaluation_period'])
                 ]
             )
             
@@ -202,44 +191,53 @@ class LightGBMTrainer:
             train_rmse = np.sqrt(train_mse)
             train_mae = mean_absolute_error(self.y_train, self.train_predictions)
             train_r2 = r2_score(self.y_train, self.train_predictions)
+            train_nrmse = train_rmse / np.std(self.y_train) if np.std(self.y_train) > 0 else 0
             
             # 计算验证集指标
             val_mse = mean_squared_error(self.y_val, self.val_predictions)
             val_rmse = np.sqrt(val_mse)
             val_mae = mean_absolute_error(self.y_val, self.val_predictions)
             val_r2 = r2_score(self.y_val, self.val_predictions)
+            val_nrmse = val_rmse / np.std(self.y_val) if np.std(self.y_val) > 0 else 0
             
             # 计算测试集指标
             test_mse = mean_squared_error(self.y_test, self.test_predictions)
             test_rmse = np.sqrt(test_mse)
             test_mae = mean_absolute_error(self.y_test, self.test_predictions)
             test_r2 = r2_score(self.y_test, self.test_predictions)
+            test_nrmse = test_rmse / np.std(self.y_test) if np.std(self.y_test) > 0 else 0
             
             self.metrics = {
                 'train': {
                     'mse': train_mse,
                     'rmse': train_rmse,
+                    'nrmse': train_nrmse,
                     'mae': train_mae,
-                    'r2': train_r2
+                    'r2': train_r2,
+                    'target_std': np.std(self.y_train)
                 },
                 'val': {
                     'mse': val_mse,
                     'rmse': val_rmse,
+                    'nrmse': val_nrmse,
                     'mae': val_mae,
-                    'r2': val_r2
+                    'r2': val_r2,
+                    'target_std': np.std(self.y_val)
                 },
                 'test': {
                     'mse': test_mse,
                     'rmse': test_rmse,
+                    'nrmse': test_nrmse,
                     'mae': test_mae,
-                    'r2': test_r2
+                    'r2': test_r2,
+                    'target_std': np.std(self.y_test)
                 }
             }
             
             logger.info("模型评估指标:")
-            logger.info(f"训练集 - RMSE: {train_rmse:.6f}, MAE: {train_mae:.6f}, R²: {train_r2:.6f}")
-            logger.info(f"验证集 - RMSE: {val_rmse:.6f}, MAE: {val_mae:.6f}, R²: {val_r2:.6f}")
-            logger.info(f"测试集 - RMSE: {test_rmse:.6f}, MAE: {test_mae:.6f}, R²: {test_r2:.6f}")
+            logger.info(f"训练集 - RMSE: {train_rmse:.6f}, NRMSE: {train_nrmse:.6f}, MAE: {train_mae:.6f}, R²: {train_r2:.6f}")
+            logger.info(f"验证集 - RMSE: {val_rmse:.6f}, NRMSE: {val_nrmse:.6f}, MAE: {val_mae:.6f}, R²: {val_r2:.6f}")
+            logger.info(f"测试集 - RMSE: {test_rmse:.6f}, NRMSE: {test_nrmse:.6f}, MAE: {test_mae:.6f}, R²: {test_r2:.6f}")
             
             return True
             
@@ -248,8 +246,8 @@ class LightGBMTrainer:
             return False
     
     def calculate_ic(self):
-        """计算IC（信息系数）- 仅分析测试集"""
-        logger.info("正在计算IC（仅测试集）...")
+        """计算IC（信息系数）和IR（信息比率）- 仅分析测试集"""
+        logger.info("正在计算IC和IR（仅测试集）...")
         
         try:
             from scipy.stats import pearsonr, spearmanr
@@ -264,32 +262,106 @@ class LightGBMTrainer:
             # 斯皮尔曼相关系数
             spearman_corr, spearman_p = spearmanr(predictions, actual)
             
+            # 从配置文件获取IC计算参数
+            ic_params = config.get_ic_params()
+            
+            # 计算IR（Information Ratio）
+            # IR = IC / IC_std，这里我们使用滚动窗口计算IC的标准差
+            window_size = min(ic_params['window_size'], len(predictions) // 10)  # 使用配置的窗口大小或数据长度的1/10
+            if window_size < ic_params['min_window_size']:
+                window_size = min(ic_params['min_window_size'], len(predictions) // 2)
+            
+            # 计算滚动IC
+            rolling_ic = []
+            for i in range(window_size, len(predictions)):
+                start_idx = i - window_size
+                end_idx = i
+                window_pred = predictions[start_idx:end_idx]
+                window_actual = actual.iloc[start_idx:end_idx]
+                
+                if len(window_pred) > 1 and len(window_actual) > 1:
+                    try:
+                        ic, _ = pearsonr(window_pred, window_actual)
+                        if not np.isnan(ic):
+                            rolling_ic.append(ic)
+                    except:
+                        continue
+            
+            # 计算IC统计量
+            if len(rolling_ic) > 1:
+                ic_mean = np.mean(rolling_ic)
+                ic_std = np.std(rolling_ic)
+                pearson_ir = ic_mean / ic_std if ic_std > 0 else 0
+            else:
+                ic_mean = pearson_corr
+                ic_std = 0
+                pearson_ir = 0
+            
+            # 计算斯皮尔曼IR
+            rolling_spearman_ic = []
+            for i in range(window_size, len(predictions)):
+                start_idx = i - window_size
+                end_idx = i
+                window_pred = predictions[start_idx:end_idx]
+                window_actual = actual.iloc[start_idx:end_idx]
+                
+                if len(window_pred) > 1 and len(window_actual) > 1:
+                    try:
+                        ic, _ = spearmanr(window_pred, window_actual)
+                        if not np.isnan(ic):
+                            rolling_spearman_ic.append(ic)
+                    except:
+                        continue
+            
+            if len(rolling_spearman_ic) > 1:
+                spearman_ic_mean = np.mean(rolling_spearman_ic)
+                spearman_ic_std = np.std(rolling_spearman_ic)
+                spearman_ir = spearman_ic_mean / spearman_ic_std if spearman_ic_std > 0 else 0
+            else:
+                spearman_ic_mean = spearman_corr
+                spearman_ic_std = 0
+                spearman_ir = 0
+            
             self.ic_results = {
                 'test': {
                     'pearson_ic': pearson_corr,
                     'pearson_p_value': pearson_p,
                     'spearman_ic': spearman_corr,
                     'spearman_p_value': spearman_p,
+                    'pearson_ir': pearson_ir,
+                    'spearman_ir': spearman_ir,
+                    'ic_mean': ic_mean,
+                    'ic_std': ic_std,
+                    'spearman_ic_mean': spearman_ic_mean,
+                    'spearman_ic_std': spearman_ic_std,
+                    'rolling_windows': len(rolling_ic),
                     'sample_size': len(predictions)
                 }
             }
             
-            logger.info("IC计算结果（测试集）:")
+            logger.info("IC和IR计算结果（测试集）:")
             logger.info(f"测试集 - 皮尔逊IC: {pearson_corr:.6f} (p={pearson_p:.6f})")
             logger.info(f"测试集 - 斯皮尔曼IC: {spearman_corr:.6f} (p={spearman_p:.6f})")
+            logger.info(f"测试集 - 皮尔逊IR: {pearson_ir:.6f}")
+            logger.info(f"测试集 - 斯皮尔曼IR: {spearman_ir:.6f}")
             logger.info(f"测试集样本数: {len(predictions)}")
+            logger.info(f"滚动窗口数: {len(rolling_ic)}")
             
             return True
             
         except Exception as e:
-            logger.error(f"计算IC失败: {str(e)}")
+            logger.error(f"计算IC和IR失败: {str(e)}")
             return False
     
-    def save_results(self, output_dir="model_results"):
+    def save_results(self, output_dir=None):
         """保存训练结果"""
         logger.info("正在保存训练结果...")
         
         try:
+            # 从配置文件获取默认输出目录
+            if output_dir is None:
+                output_dir = config.MODEL_RESULTS_DIR
+            
             # 创建输出目录
             os.makedirs(output_dir, exist_ok=True)
             
@@ -423,12 +495,13 @@ def main():
         
         print("\n模型性能:")
         for dataset, metrics in trainer.metrics.items():
-            print(f"{dataset.upper()} - RMSE: {metrics['rmse']:.6f}, R²: {metrics['r2']:.6f}")
+            print(f"{dataset.upper()} - RMSE: {metrics['rmse']:.6f}, NRMSE: {metrics['nrmse']:.6f}, R²: {metrics['r2']:.6f}")
         
-        print("\nIC分析结果（测试集）:")
+        print("\nIC和IR分析结果（测试集）:")
         test_ic = trainer.ic_results['test']
-        print(f"测试集 - 皮尔逊IC: {test_ic['pearson_ic']:.6f}, 斯皮尔曼IC: {test_ic['spearman_ic']:.6f}")
-        print(f"测试集样本数: {test_ic['sample_size']}")
+        print(f"测试集 - 皮尔逊IC: {test_ic['pearson_ic']:.6f}, 皮尔逊IR: {test_ic['pearson_ir']:.6f}")
+        print(f"测试集 - 斯皮尔曼IC: {test_ic['spearman_ic']:.6f}, 斯皮尔曼IR: {test_ic['spearman_ir']:.6f}")
+        print(f"测试集样本数: {test_ic['sample_size']}, 滚动窗口数: {test_ic['rolling_windows']}")
         
         print("\n特征重要性:")
         for _, row in trainer.feature_importance.iterrows():

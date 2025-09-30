@@ -190,13 +190,14 @@ class TrainingPipeline:
                     
                     f.write("模型性能:\n")
                     for dataset, metrics in self.trainer.metrics.items():
-                        f.write(f"  {dataset.upper()} - RMSE: {metrics['rmse']:.6f}, R²: {metrics['r2']:.6f}\n")
+                        f.write(f"  {dataset.upper()} - RMSE: {metrics['rmse']:.6f}, NRMSE: {metrics['nrmse']:.6f}, R²: {metrics['r2']:.6f}\n")
                     f.write("\n")
                     
-                    f.write("IC分析结果（测试集）:\n")
+                    f.write("IC和IR分析结果（测试集）:\n")
                     test_ic = self.trainer.ic_results['test']
-                    f.write(f"  测试集 - 皮尔逊IC: {test_ic['pearson_ic']:.6f}, 斯皮尔曼IC: {test_ic['spearman_ic']:.6f}\n")
-                    f.write(f"  测试集样本数: {test_ic['sample_size']}\n")
+                    f.write(f"  测试集 - 皮尔逊IC: {test_ic['pearson_ic']:.6f}, 皮尔逊IR: {test_ic['pearson_ir']:.6f}\n")
+                    f.write(f"  测试集 - 斯皮尔曼IC: {test_ic['spearman_ic']:.6f}, 斯皮尔曼IR: {test_ic['spearman_ir']:.6f}\n")
+                    f.write(f"  测试集样本数: {test_ic['sample_size']}, 滚动窗口数: {test_ic['rolling_windows']}\n")
                     f.write("\n")
                     
                     f.write("特征重要性:\n")
