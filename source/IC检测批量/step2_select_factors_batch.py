@@ -25,24 +25,22 @@ logger = logging.getLogger(__name__)
 class FactorBatchSelector:
     """批量因子选择器"""
     
-    def __init__(self, config, data_dir, batch_config=None):
+    def __init__(self, config, data_dir):
         """
         初始化批量因子选择器
         
         Args:
-            config: 配置对象
+            config: 配置对象（BatchConfig）
             data_dir (str): 数据目录路径
-            batch_config: 批量配置对象（来自config_batch.py）
         """
         self.config = config
         self.data_dir = data_dir
-        self.batch_config = batch_config
         
-        # 根据batch_config的因子库模式创建因子库
-        if batch_config and hasattr(batch_config, 'get_factor_sources'):
-            factor_sources = batch_config.get_factor_sources()
+        # 根据config的因子库模式创建因子库
+        if hasattr(config, 'get_factor_sources'):
+            factor_sources = config.get_factor_sources()
             self.factor_lib = UnifiedFactorLibrary(sources=factor_sources)
-            logger.info(f"使用因子库模式: {batch_config.FACTOR_LIBRARY_MODE}")
+            logger.info(f"使用因子库模式: {config.FACTOR_LIBRARY_MODE}")
             logger.info(f"加载的因子源: {factor_sources}")
         else:
             self.factor_lib = UnifiedFactorLibrary()

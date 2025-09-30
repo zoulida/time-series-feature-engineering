@@ -36,15 +36,28 @@ def analyze_ic_results():
     with open(latest_file, 'r', encoding='utf-8') as f:
         ic_data = json.load(f)
     
+    # 检查数据是否为空
+    if not ic_data:
+        print("错误：IC结果文件为空，没有可分析的因子数据")
+        print("请先运行IC分析流程生成因子数据")
+        return
+    
     # 转换为DataFrame便于分析
     results = []
     for factor_name, data in ic_data.items():
-        results.append({
-            'factor_name': factor_name,
-            'pearson_ic': data['pearson_ic'],
-            'spearman_ic': data['spearman_ic'],
-            'sample_size': data['sample_size']
-        })
+        if isinstance(data, dict) and 'pearson_ic' in data:
+            results.append({
+                'factor_name': factor_name,
+                'pearson_ic': data['pearson_ic'],
+                'spearman_ic': data['spearman_ic'],
+                'sample_size': data['sample_size']
+            })
+        else:
+            print(f"警告：因子 {factor_name} 的数据格式不正确: {data}")
+    
+    if not results:
+        print("错误：没有找到有效的因子数据")
+        return
     
     df = pd.DataFrame(results)
     

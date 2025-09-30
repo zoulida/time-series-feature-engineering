@@ -85,6 +85,18 @@ class MyFactors:
                     "最大比例": 0.1,
                     "评分范围": "[0, 1]"
                 }
+            },
+            "REV_CT_FACTOR": {
+                "expression": "REV_CT_FACTOR($close, $volume)",
+                "function_name": "rev_ct_factor",
+                "description": "反转换手因子：短线反转+换手异常，-(ts_rank(close,5) * ts_rank(volume,5))",
+                "category": "反转因子",
+                "formula": "-(ts_rank(close,5) * ts_rank(volume,5))",
+                "parameters": {
+                    "价格排名周期": 5,
+                    "成交量排名周期": 5,
+                    "因子类型": "反转因子"
+                }
             }
         }
     
@@ -250,6 +262,97 @@ class MyFactors:
             return pd.Series([0] * len(close), index=close.index)
         
         return self._calculate_price_score(close, ma_period=20, max_ratio=0.1)
+    
+    def rev_ct_factor(self, 
+                     close: pd.Series = None,
+                     high: pd.Series = None,
+                     volume: pd.Series = None,
+                     stock_code: str = '000001.SZ') -> pd.Series:
+        """
+        反转换手因子（REV_CT）：短线反转 + 换手异常
+        
+        因子公式：-(ts_rank(close, 5) * ts_rank(volume, 5))
+        
+        逻辑说明：
+        - ts_rank(x, d) 表示过去 d 天截面排名（0~1，越大越靠后）
+        - 取负号 → 排名越小（越靠后）因子值越大，押反弹
+        - 换手也排名 → 过滤"无量阴跌"假反转
+        
+        Parameters:
+        -----------
+        close : pd.Series
+            收盘价序列
+        volume : pd.Series
+            成交量序列
+            
+        Returns:
+        --------
+        pd.Series
+            反转换手因子值，范围[0, 1]，值越大表示反转信号越强
+        """
+        # 验证必需参数
+        if close is None or volume is None:
+            raise ValueError("反转换手因子需要close和volume参数")
+        
+        # 确保数据长度足够
+        min_length = 5  # 至少需要5天数据
+        if len(close) < min_length or len(volume) < min_length:
+            return pd.Series([0] * len(close), index=close.index)
+        
+        # 计算价格5日排名
+        close_rank = self._ts_rank(close, period=5)
+        
+        # 计算成交量5日排名
+        volume_rank = self._ts_rank(volume, period=5)
+        
+        # 计算因子值：-(ts_rank(close,5) * ts_rank(volume,5))
+        # 然后转换为0-1范围：1 + factor_value
+        factor_value = -(close_rank * volume_rank)
+        
+        # 将范围从[-1, 0]转换为[0, 1]
+        # 公式：1 + factor_value，这样-1变成0，0变成1
+        normalized_factor = 1 + factor_value
+        
+        return normalized_factor
+    
+    def _ts_rank(self, series: pd.Series, period: int = 5) -> pd.Series:
+        """
+        计算时间序列排名（ts_rank）
+        
+        对于每个时间点，计算过去period天内的截面排名
+        排名范围：0~1，越大表示排名越靠后
+        
+        Parameters:
+        -----------
+        series : pd.Series
+            输入序列
+        period : int
+            排名周期
+            
+        Returns:
+        --------
+        pd.Series
+            排名序列，范围[0, 1]
+        """
+        result = pd.Series(0.0, index=series.index)
+        
+        for i in range(period - 1, len(series)):
+            # 获取过去period天的数据
+            window_data = series.iloc[i-period+1:i+1]
+            
+            # 计算当前值在窗口中的排名
+            # 使用pandas的rank方法，method='min'确保相同值的排名一致
+            ranks = window_data.rank(method='min', ascending=True)
+            
+            # 获取当前值（最后一个值）的排名
+            current_rank = ranks.iloc[-1]
+            
+            # 标准化到0-1范围：(rank - 1) / (period - 1)
+            normalized_rank = (current_rank - 1) / (period - 1)
+            
+            result.iloc[i] = normalized_rank
+        
+        return result
     
     def _calculate_zhangting_score(self, close: pd.Series, high: pd.Series, 
                                   stock_code: str, period: int = 7) -> pd.Series:

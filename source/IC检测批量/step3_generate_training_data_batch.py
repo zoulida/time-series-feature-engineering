@@ -24,19 +24,30 @@ logger = logging.getLogger(__name__)
 class TrainingDataBatchGenerator:
     """批量训练数据生成器"""
     
-    def __init__(self, config, memory_monitor=None):
+    def __init__(self, config, memory_monitor=None, batch_config=None):
         """
         初始化批量训练数据生成器
         
         Args:
-            config: 配置对象
+            config: 工作流配置对象
             memory_monitor: 内存监控器实例
+            batch_config: 批量配置对象（包含收益率计算配置）
         """
         self.config = config
+        self.batch_config = batch_config
         self.memory_monitor = memory_monitor or MemoryMonitor()
         self.data_dir = os.path.join(os.path.dirname(__file__), 'data')
         os.makedirs(self.data_dir, exist_ok=True)
-        self.factor_lib = UnifiedFactorLibrary()
+        
+        # 根据配置的因子库模式创建因子库
+        if hasattr(config, 'get_factor_sources'):
+            factor_sources = config.get_factor_sources()
+            self.factor_lib = UnifiedFactorLibrary(sources=factor_sources)
+            logger.info(f"使用因子库模式: {config.FACTOR_LIBRARY_MODE}")
+            logger.info(f"加载的因子源: {factor_sources}")
+        else:
+            self.factor_lib = UnifiedFactorLibrary()
+            logger.info("使用默认因子库配置")
         
     def generate_training_data_batch(self, stock_data, selected_factors, progress_tracker=None):
         """批量生成训练数据（分批处理）
@@ -56,10 +67,11 @@ class TrainingDataBatchGenerator:
             
             # 分批处理股票
             stock_codes = list(stock_data.keys())
-            batches = [stock_codes[i:i+self.config.batch_size] 
-                      for i in range(0, len(stock_codes), self.config.batch_size)]
+            batch_size = self.config.get_batch_size()
+            batches = [stock_codes[i:i+batch_size] 
+                      for i in range(0, len(stock_codes), batch_size)]
             
-            logger.info(f"分为 {len(batches)} 个批次处理，每批最多 {self.config.batch_size} 只股票")
+            logger.info(f"分为 {len(batches)} 个批次处理，每批最多 {batch_size} 只股票")
             
             all_training_data = []
             
@@ -117,12 +129,23 @@ class TrainingDataBatchGenerator:
         try:
             all_training_data = []
             
-            for stock_code in stock_batch:
+            # 添加进度条
+            from tqdm import tqdm
+            import time
+            
+            start_time = time.time()
+            logger.info(f"开始处理 {len(stock_batch)} 只股票...")
+            
+            # 使用tqdm显示进度条
+            for i, stock_code in enumerate(tqdm(stock_batch, desc="处理股票", unit="只")):
                 if stock_code not in stock_data:
                     continue
                 
+                stock_start_time = time.time()
                 df = stock_data[stock_code].copy()
-                logger.info(f"处理股票 {stock_code}: {len(df)} 条记录")
+                
+                # 添加VWAP计算（为ALPHA_VWAP0因子提供数据）
+                df = self._add_vwap_calculation(df)
                 
                 # 计算因子 - 使用批量添加避免碎片化
                 factor_data = self._calculate_factors_for_stock(df, selected_factors)
@@ -143,16 +166,26 @@ class TrainingDataBatchGenerator:
                 df['stock_code'] = stock_code
                 
                 all_training_data.append(df)
+                
+                # 计算单只股票处理耗时
+                stock_time = time.time() - stock_start_time
+                logger.debug(f"处理股票 {stock_code}: {len(df)} 条记录，耗时 {stock_time:.2f}秒")
+            
+            total_time = time.time() - start_time
+            logger.info(f"批次处理完成，总耗时: {total_time:.2f}秒，平均每只股票: {total_time/len(stock_batch):.2f}秒")
             
             # 合并当前批次数据
             if all_training_data:
                 batch_df = pd.concat(all_training_data, ignore_index=True)
-                # 移除包含NaN的行
+                # 只移除关键列包含NaN的行（保留因子列中的NaN，因为IC分析会处理）
                 initial_rows = len(batch_df)
-                batch_df = batch_df.dropna()
+                key_columns = ['date', 'close', 'return_15d']  # 只检查关键列
+                available_key_columns = [col for col in key_columns if col in batch_df.columns]
+                if available_key_columns:
+                    batch_df = batch_df.dropna(subset=available_key_columns)
                 removed_rows = initial_rows - len(batch_df)
                 if removed_rows > 0:
-                    logger.info(f"批次移除了 {removed_rows} 行包含NaN的数据")
+                    logger.info(f"批次移除了 {removed_rows} 行关键列包含NaN的数据")
                 
                 # 重新排列列顺序，将return_15d放到最后一列（IC检测目标）
                 if 'return_15d' in batch_df.columns:
@@ -228,7 +261,7 @@ class TrainingDataBatchGenerator:
             return np.full(len(data), np.nan)
     
     def _calculate_alpha158_factor(self, data, factor_name, factor_info):
-        """计算Alpha158因子
+        """计算Alpha158因子 - 使用直接计算函数
         
         Args:
             data (pd.DataFrame): 股票数据
@@ -238,9 +271,49 @@ class TrainingDataBatchGenerator:
         Returns:
             np.ndarray: 因子值数组
         """
-        # 这里应该实现Alpha158因子的具体计算逻辑
-        # 目前使用简化版本
-        return np.random.randn(len(data))
+        try:
+            function_name = factor_info.get('function_name', '')
+            if not function_name:
+                logger.warning(f"Alpha158因子 {factor_name} 没有函数名")
+                return np.full(len(data), np.nan)
+            
+            # 获取Alpha158因子库实例
+            if not hasattr(self, '_alpha158_lib'):
+                import sys
+                import os
+                # 添加因子库路径
+                factor_lib_path = os.path.join(os.path.dirname(__file__), '..', '因子库')
+                if factor_lib_path not in sys.path:
+                    sys.path.append(factor_lib_path)
+                from alpha158_factors import Alpha158Factors
+                self._alpha158_lib = Alpha158Factors()
+            
+            # 获取计算函数
+            if not hasattr(self._alpha158_lib, function_name):
+                logger.warning(f"Alpha158因子库中没有函数: {function_name}")
+                return np.full(len(data), np.nan)
+            
+            calc_func = getattr(self._alpha158_lib, function_name)
+            
+            # 获取函数参数
+            parameters = factor_info.get('parameters', [])
+            
+            # 准备函数参数
+            args = []
+            for param in parameters:
+                if param in data.columns:
+                    args.append(data[param])
+                else:
+                    logger.warning(f"Alpha158因子 {factor_name} 缺少参数: {param}")
+                    return np.full(len(data), np.nan)
+            
+            # 调用计算函数
+            result = calc_func(*args)
+            return result.values if hasattr(result, 'values') else result
+                
+        except Exception as e:
+            logger.error(f"计算Alpha158因子 {factor_name} 失败: {str(e)}")
+            return np.full(len(data), np.nan)
     
     def _calculate_tsfresh_factor(self, data, factor_name, factor_info):
         """计算tsfresh因子
@@ -253,9 +326,217 @@ class TrainingDataBatchGenerator:
         Returns:
             np.ndarray: 因子值数组
         """
-        # 这里应该实现tsfresh因子的具体计算逻辑
-        # 目前使用简化版本
-        return np.random.randn(len(data))
+        try:
+            # 获取因子函数名
+            function_name = factor_info.get('function_name', '')
+            if not function_name:
+                logger.warning(f"tsfresh因子 {factor_name} 没有函数名")
+                return np.full(len(data), np.nan)
+            
+            # 提取原始特征名（去掉tsfresh_前缀）
+            if function_name.startswith('tsfresh_'):
+                feature_name = function_name[8:]  # 去掉'tsfresh_'前缀
+            else:
+                feature_name = function_name
+            
+            # 使用close价格序列作为主要输入
+            price_series = data['close']
+            
+            # 根据特征名计算对应的tsfresh特征
+            if feature_name == 'abs_energy':
+                # 绝对能量
+                return (price_series ** 2).rolling(5).sum().values
+                
+            elif feature_name == 'absolute_sum_of_changes':
+                # 绝对变化和
+                return price_series.diff().abs().rolling(5).sum().values
+                
+            elif feature_name == 'count_above_mean':
+                # 高于均值的数量
+                mean_val = price_series.rolling(5).mean()
+                return (price_series > mean_val).rolling(5).sum().values
+                
+            elif feature_name == 'count_below_mean':
+                # 低于均值的数量
+                mean_val = price_series.rolling(5).mean()
+                return (price_series < mean_val).rolling(5).sum().values
+                
+            elif feature_name == 'mean_abs_change':
+                # 平均绝对变化
+                return price_series.diff().abs().rolling(5).mean().values
+                
+            elif feature_name == 'mean_change':
+                # 平均变化
+                return price_series.diff().rolling(5).mean().values
+                
+            elif feature_name == 'standard_deviation':
+                # 标准差
+                return price_series.rolling(5).std().values
+                
+            elif feature_name == 'variance':
+                # 方差
+                return price_series.rolling(5).var().values
+                
+            elif feature_name == 'root_mean_square':
+                # 均方根
+                return np.sqrt((price_series ** 2).rolling(5).mean()).values
+                
+            elif feature_name == 'number_peaks':
+                # 峰值数量
+                return price_series.rolling(5).apply(lambda x: self._count_peaks(x)).values
+                
+            elif feature_name == 'number_crossings':
+                # 交叉数量
+                return price_series.rolling(5).apply(lambda x: self._count_crossings(x)).values
+                
+            elif feature_name == 'autocorrelation':
+                # 自相关
+                return price_series.rolling(5).apply(lambda x: x.autocorr(lag=1) if len(x) > 1 else np.nan).values
+                
+            else:
+                # 其他特征使用简化计算
+                logger.warning(f"未实现的tsfresh特征: {feature_name}")
+                return np.full(len(data), np.nan)
+                
+        except Exception as e:
+            logger.error(f"计算tsfresh因子 {factor_name} 失败: {str(e)}")
+            return np.full(len(data), np.nan)
+    
+    def _count_peaks(self, series):
+        """计算峰值数量"""
+        if len(series) < 3:
+            return 0
+        peaks = 0
+        for i in range(1, len(series) - 1):
+            if series.iloc[i] > series.iloc[i-1] and series.iloc[i] > series.iloc[i+1]:
+                peaks += 1
+        return peaks
+    
+    def _count_crossings(self, series):
+        """计算交叉数量（与均值交叉）"""
+        if len(series) < 2:
+            return 0
+        mean_val = series.mean()
+        crossings = 0
+        for i in range(1, len(series)):
+            if (series.iloc[i-1] < mean_val and series.iloc[i] > mean_val) or \
+               (series.iloc[i-1] > mean_val and series.iloc[i] < mean_val):
+                crossings += 1
+        return crossings
+    
+    def _evaluate_expression(self, expression, data):
+        """解析并计算因子表达式
+        
+        Args:
+            expression (str): 因子表达式
+            data (pd.DataFrame): 股票数据
+            
+        Returns:
+            np.ndarray: 计算结果
+        """
+        try:
+            # 替换表达式中的变量
+            expr = expression
+            
+            # 替换$close, $high, $low, $open, $volume等变量
+            if '$close' in expr and 'close' in data.columns:
+                expr = expr.replace('$close', 'data["close"]')
+            if '$high' in expr and 'high' in data.columns:
+                expr = expr.replace('$high', 'data["high"]')
+            if '$low' in expr and 'low' in data.columns:
+                expr = expr.replace('$low', 'data["low"]')
+            if '$open' in expr and 'open' in data.columns:
+                expr = expr.replace('$open', 'data["open"]')
+            if '$volume' in expr and 'volume' in data.columns:
+                expr = expr.replace('$volume', 'data["volume"]')
+            
+            # 替换函数名 - 使用正则表达式更精确地替换
+            import re
+            
+            # 替换Ref函数
+            expr = re.sub(r'Ref\(([^,]+),\s*(\d+)\)', r'\1.shift(\2)', expr)
+            
+            # 替换Mean函数
+            expr = re.sub(r'Mean\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).mean()', expr)
+            
+            # 替换Std函数
+            expr = re.sub(r'Std\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).std()', expr)
+            
+            # 先处理IdxMax和IdxMin函数（避免被Max和Min函数误匹配）
+            # IdxMax函数: IdxMax(data["high"], 20) -> data["high"].rolling(20).apply(lambda x: x.idxmax() - x.index[0] if len(x) > 0 else np.nan)
+            expr = re.sub(r'IdxMax\(data\["([^"]+)"\],\s*(\d+)\)', r'data["\1"].rolling(\2).apply(lambda x: x.idxmax() - x.index[0] if len(x) > 0 else np.nan)', expr)
+            
+            # IdxMin函数: IdxMin(data["low"], 20) -> data["low"].rolling(20).apply(lambda x: x.idxmin() - x.index[0] if len(x) > 0 else np.nan)
+            expr = re.sub(r'IdxMin\(data\["([^"]+)"\],\s*(\d+)\)', r'data["\1"].rolling(\2).apply(lambda x: x.idxmin() - x.index[0] if len(x) > 0 else np.nan)', expr)
+            
+            # 替换Max函数
+            expr = re.sub(r'Max\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).max()', expr)
+            
+            # 替换Min函数
+            expr = re.sub(r'Min\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).min()', expr)
+            
+            # 替换Sum函数
+            expr = re.sub(r'Sum\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).sum()', expr)
+            
+            # 替换其他函数
+            expr = expr.replace('Greater(', 'np.maximum(')
+            expr = expr.replace('Less(', 'np.minimum(')
+            expr = expr.replace('Abs(', 'np.abs(')
+            
+            # 添加更多Alpha158函数支持
+            
+            # Quantile函数: Quantile($close, 20, 0.8) -> data["close"].rolling(20).quantile(0.8)
+            expr = re.sub(r'Quantile\(([^,]+),\s*(\d+),\s*([0-9.]+)\)', r'\1.rolling(\2).quantile(\3)', expr)
+            
+            # Rank函数: Rank($close, 20) -> data["close"].rolling(20).rank(pct=True)
+            expr = re.sub(r'Rank\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).rank(pct=True)', expr)
+            
+            # Corr函数: Corr($close, $volume, 20) -> data["close"].rolling(20).corr(data["volume"])
+            expr = re.sub(r'Corr\(([^,]+),\s*([^,]+),\s*(\d+)\)', r'\1.rolling(\3).corr(\2)', expr)
+            
+            # Rsquare函数: Rsquare($close, 20) -> data["close"].rolling(20).apply(lambda x: x.corr(pd.Series(range(len(x))))**2 if len(x) > 1 else np.nan)
+            expr = re.sub(r'Rsquare\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).apply(lambda x: x.corr(pd.Series(range(len(x))))**2 if len(x) > 1 else np.nan)', expr)
+            
+            # Resi函数: Resi($close, 20) -> data["close"].rolling(20).apply(lambda x: x.iloc[-1] - x.mean() if len(x) > 0 else np.nan)
+            expr = re.sub(r'Resi\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).apply(lambda x: x.iloc[-1] - x.mean() if len(x) > 0 else np.nan)', expr)
+            
+            # Slope函数: Slope($close, 20) -> data["close"].rolling(20).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else np.nan)
+            expr = re.sub(r'Slope\(([^,]+),\s*(\d+)\)', r'\1.rolling(\2).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) > 1 else np.nan)', expr)
+            
+            # Log函数: Log($volume+1) -> np.log(data["volume"]+1)
+            expr = re.sub(r'Log\(([^)]+)\)', r'np.log(\1)', expr)
+            
+            # 处理复杂的条件表达式
+            # Mean($close>Ref($close, 1), 10) -> (data["close"] > data["close"].shift(1)).rolling(10).mean()
+            expr = re.sub(r'Mean\(([^>]+)>([^,]+),\s*(\d+)\)', r'(\1 > \2).rolling(\3).mean()', expr)
+            expr = re.sub(r'Mean\(([^<]+)<([^,]+),\s*(\d+)\)', r'(\1 < \2).rolling(\3).mean()', expr)
+            
+            # 处理更复杂的条件表达式，需要先处理括号内的内容
+            # 例如: Mean($close>Ref($close, 1), 5)-Mean($close<Ref($close, 1), 5)
+            # 先处理第一个Mean
+            expr = re.sub(r'Mean\(([^)]*\$[^)]*>[^)]*),\s*(\d+)\)', 
+                         lambda m: f'({m.group(1)}).rolling({m.group(2)}).mean()', expr)
+            # 再处理第二个Mean
+            expr = re.sub(r'Mean\(([^)]*\$[^)]*<[^)]*),\s*(\d+)\)', 
+                         lambda m: f'({m.group(1)}).rolling({m.group(2)}).mean()', expr)
+            
+            # 处理vwap变量（如果存在）
+            if '$vwap' in expr:
+                # 简单的vwap计算：(high + low + close) / 3
+                expr = expr.replace('$vwap', '((data["high"] + data["low"] + data["close"]) / 3)')
+            
+            
+            # 调试信息
+            logger.debug(f"原始表达式: {expression}")
+            logger.debug(f"解析后表达式: {expr}")
+            
+            # 安全地执行表达式
+            result = eval(expr)
+            return result.values if hasattr(result, 'values') else result
+            
+        except Exception as e:
+            logger.warning(f"表达式解析失败: {expression}, 错误: {e}")
+            return np.full(len(data), np.nan)
     
     def _calculate_generic_factor(self, data, factor_name, factor_info):
         """计算通用因子
@@ -332,13 +613,23 @@ class TrainingDataBatchGenerator:
         """
         returns = {}
         
-        # 计算未来15天中收益率的最大值
-        if len(data) > 15:
-            # 计算未来1-15天的所有收益率
-            future_returns = []
-            for i in range(1, 16):  # 1天到15天
-                future_return = data['close'].shift(-i) / data['close'] - 1
-                future_returns.append(future_return)
+        # 根据配置选择收益率计算方法
+        if self.batch_config:
+            method = self.batch_config.RETURN_CALCULATION_METHOD
+            future_days = self.batch_config.FUTURE_DAYS
+        else:
+            # 如果没有batch_config，使用默认配置
+            method = 'max_future_15d'
+            future_days = 15
+        
+        if method == 'max_future_15d':
+            # 方法1：计算未来15天中收益率的最大值
+            if len(data) > future_days:
+                # 计算未来1到future_days天的所有收益率
+                future_returns = []
+                for i in range(1, future_days + 1):  # 1天到future_days天
+                    future_return = data['close'].shift(-i) / data['close'] - 1
+                    future_returns.append(future_return)
             
             # 将未来收益率组合成DataFrame
             future_returns_df = pd.DataFrame(future_returns).T
@@ -347,6 +638,33 @@ class TrainingDataBatchGenerator:
             returns['return_15d'] = max_future_return
             
             # 保留过去15天收益率作为参考
+            past_return = data['close'] / data['close'].shift(15) - 1
+            returns['past_return_15d'] = past_return
+                
+        elif method == 'next_day':
+            # 方法2：后一个交易日的收益率
+            if len(data) > 1:
+                # 计算下一个交易日的收益率
+                next_day_return = data['close'].shift(-1) / data['close'] - 1
+                returns['return_15d'] = next_day_return  # 保持列名一致，便于后续处理
+                
+                # 保留过去1天收益率作为参考
+                past_return = data['close'] / data['close'].shift(1) - 1
+                returns['past_return_15d'] = past_return
+                
+        else:
+            # 默认使用max_future_15d方法
+            logger.warning(f"未知的收益率计算方法: {method}，使用默认方法")
+            if len(data) > 15:
+                future_returns = []
+                for i in range(1, 16):
+                    future_return = data['close'].shift(-i) / data['close'] - 1
+                    future_returns.append(future_return)
+                
+                future_returns_df = pd.DataFrame(future_returns).T
+                max_future_return = future_returns_df.max(axis=1)
+                returns['return_15d'] = max_future_return
+                
             past_return = data['close'] / data['close'].shift(15) - 1
             returns['past_return_15d'] = past_return
         
@@ -415,3 +733,34 @@ class TrainingDataBatchGenerator:
                 'end': training_data['date'].max() if 'date' in training_data.columns else None
             } if 'date' in training_data.columns else {}
         }
+    
+    def _add_vwap_calculation(self, data):
+        """添加VWAP（成交量加权平均价格）计算
+        
+        Args:
+            data (pd.DataFrame): 股票数据
+            
+        Returns:
+            pd.DataFrame: 添加了vwap列的数据
+        """
+        try:
+            # 检查必需的列是否存在
+            required_cols = ['high', 'low', 'close', 'volume']
+            missing_cols = [col for col in required_cols if col not in data.columns]
+            if missing_cols:
+                logger.warning(f"缺少VWAP计算所需的列: {missing_cols}")
+                return data
+            
+            # 计算VWAP = (high + low + close) / 3 * volume 的加权平均
+            # 使用典型价格 (high + low + close) / 3
+            typical_price = (data['high'] + data['low'] + data['close']) / 3
+            
+            # 计算VWAP：典型价格按成交量加权
+            data['vwap'] = (typical_price * data['volume']).rolling(window=len(data), min_periods=1).sum() / data['volume'].rolling(window=len(data), min_periods=1).sum()
+            
+            logger.debug(f"成功计算VWAP，数据长度: {len(data)}")
+            return data
+            
+        except Exception as e:
+            logger.warning(f"计算VWAP失败: {str(e)}")
+            return data

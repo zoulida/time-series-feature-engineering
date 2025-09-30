@@ -45,32 +45,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class WorkflowConfig:
-    """工作流配置类 - 管理所有运行参数和性能设置"""
-    
-    def __init__(self):
-        # 测试配置 - 用于快速验证功能
-        self.test_mode = False  # 是否启用测试模式（True=测试模式，False=生产模式）
-        self.test_stocks = 100  # 测试模式股票数量（快速验证用，建议100-500只）
-        self.test_factors = 50  # 测试模式因子数量（快速验证用，建议20-100个）
-        
-        # 生产配置 - 用于大规模数据分析
-        self.production_stocks = 5000  # 生产模式股票数量（最大支持5000只股票）
-        self.production_factors = 500  # 生产模式因子数量（统一因子库全部因子）
-        
-        # 分批配置 - 优化内存使用和性能
-        self.batch_size = 500  # 每批处理的股票数量（平衡内存使用和处理效率）
-        self.max_memory_gb = 4  # 最大内存使用限制(GB)（超过会触发垃圾回收）
-        
-        # 并行配置 - 提升计算效率
-        self.max_workers = 4  # 最大并行进程数（避免系统过载，建议2-8个）
-        self.enable_parallel = True  # 是否启用并行处理（True=多进程，False=单进程）
-        
-        # 恢复配置 - 支持断点续传
-        self.checkpoint_interval = 100  # 检查点间隔（每处理多少只股票保存一次）
-        self.enable_recovery = True  # 是否启用错误恢复（支持从中断点继续运行）
-
-
 class BatchICWorkflow:
     """批量IC检测工作流 - 主协调器
     
@@ -81,17 +55,15 @@ class BatchICWorkflow:
     4. 支持进度监控和性能统计
     """
     
-    def __init__(self, config=None, batch_config=None):
+    def __init__(self, batch_config):
         """
         初始化批量IC检测工作流
         
         Args:
-            config: 工作流配置对象
             batch_config: 批量配置对象（来自config_batch.py）
         """
-        self.config = config or WorkflowConfig()
-        self.batch_config = batch_config  # 保存batch_config用于因子选择
-        self.memory_monitor = MemoryMonitor(self.config.max_memory_gb)
+        self.config = batch_config  # 直接使用batch_config作为主配置
+        self.memory_monitor = MemoryMonitor(self.config.get_max_memory_gb())
         self.data_dir = os.path.join(os.path.dirname(__file__), 'data')
         os.makedirs(self.data_dir, exist_ok=True)
         
@@ -113,18 +85,7 @@ class BatchICWorkflow:
     
     def get_workflow_config(self):
         """获取工作流配置"""
-        if self.config.test_mode:
-            return {
-                'stocks': self.config.test_stocks,
-                'factors': self.config.test_factors,
-                'mode': '测试模式'
-            }
-        else:
-            return {
-                'stocks': self.config.production_stocks,
-                'factors': self.config.production_factors,
-                'mode': '生产模式'
-            }
+        return self.config.get_workflow_config()
     
     def run_batch_workflow(self):
         """运行批量工作流"""
@@ -171,6 +132,8 @@ class BatchICWorkflow:
         
         try:
             total_start_time = time.time()
+            start_datetime = datetime.now()
+            logger.info(f"工作流开始时间: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
             
             # 步骤1: 获取股票数据
             step1_start = time.time()
@@ -191,7 +154,7 @@ class BatchICWorkflow:
             step2_start = time.time()
             progress_tracker.update("选择因子", f"目标: {workflow_config['factors']}个因子")
             
-            factor_selector = FactorBatchSelector(self.config, self.data_dir, self.batch_config)
+            factor_selector = FactorBatchSelector(self.config, self.data_dir)
             selected_factors = factor_selector.select_factors_batch(workflow_config['factors'])
             
             step2_time = time.time() - step2_start
@@ -201,7 +164,7 @@ class BatchICWorkflow:
             step3_start = time.time()
             progress_tracker.update("生成训练数据", "分批处理中...")
             
-            training_generator = TrainingDataBatchGenerator(self.config, self.memory_monitor)
+            training_generator = TrainingDataBatchGenerator(self.config, self.memory_monitor, self.config)
             training_data = training_generator.generate_training_data_batch(stock_data, selected_factors, progress_tracker)
             
             step3_time = time.time() - step3_start
@@ -220,7 +183,7 @@ class BatchICWorkflow:
             total_time = time.time() - total_start_time
             
             # 输出详细的性能统计信息
-            self._display_performance_summary(step1_time, step2_time, step3_time, step4_time, total_time)
+            self._display_performance_summary(step1_time, step2_time, step3_time, step4_time, total_time, start_datetime)
             
             # 自动运行IC结果分析
             self._run_ic_analysis()
@@ -231,17 +194,21 @@ class BatchICWorkflow:
             logger.error(f"工作流执行失败: {str(e)}")
             return False
     
-    def _display_performance_summary(self, step1_time, step2_time, step3_time, step4_time, total_time):
+    def _display_performance_summary(self, step1_time, step2_time, step3_time, step4_time, total_time, start_datetime):
         """显示性能统计摘要"""
-        logger.info("=" * 60)
+        # 计算完成时间
+        end_datetime = datetime.now()
+        
         logger.info("工作流执行完成")
         logger.info("=" * 60)
+        logger.info(f"开始时间: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"完成时间: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"总耗时: {total_time:.2f}秒 ({total_time/60:.1f}分钟)")
         logger.info("各阶段耗时统计:")
         logger.info(f"  步骤1 - 获取股票数据: {step1_time:.2f}秒 ({step1_time/total_time*100:.1f}%)")
         logger.info(f"  步骤2 - 选择因子: {step2_time:.2f}秒 ({step2_time/total_time*100:.1f}%)")
         logger.info(f"  步骤3 - 生成训练数据: {step3_time:.2f}秒 ({step3_time/total_time*100:.1f}%)")
         logger.info(f"  步骤4 - IC分析: {step4_time:.2f}秒 ({step4_time/total_time*100:.1f}%)")
-        logger.info(f"  总耗时: {total_time:.2f}秒")
         logger.info("=" * 60)
     
     def _run_ic_analysis(self):
@@ -292,12 +259,13 @@ def main():
     4. 输出执行结果
     
     配置说明：
-    - 测试模式：100只股票，50个因子（快速验证）
-    - 生产模式：5000只股票，500个因子（完整分析）
+    - 生产模式：20只股票，500个因子（完整分析）
     """
+    # 导入配置
+    from config_batch import get_config
+    
     # 创建配置对象
-    config = WorkflowConfig()
-    config.test_mode = True
+    config = get_config()
     
     # 创建批量工作流实例
     workflow = BatchICWorkflow(config)
